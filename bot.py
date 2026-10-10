@@ -10,7 +10,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ------------------- الإعدادات المتغيرة -------------------
+# ------------------- الإعدادات المتغيرة (ضع آيديات سيرفرك) -------------------
 PAIRS = {
     1554489401445187737: 1554489401479012414,  # SPECIAL CAR -> سحب SPECIAL CAR
     1554924853117718548: 1554927314549342249,  # GOLD -> سحب GOLD
@@ -19,15 +19,16 @@ PAIRS = {
     1555423192255045713: 1554927515544584213,  # حزمة المرهمات -> سحب حزمة المرهمات
 }
 
-LOG_CHANNEL_ID = 1558423955298328679          # روم سجلات السحب (Log)
-STRIP_CHANNEL_ID = 1554489405861789729        # روم إنذارات الحزم (المخصص لاستخدام أمر السحب)
-PACKAGES_ADMIN_ROLE_ID = 1555405306777829398     # رول مسؤول الحزم
-HIGHER_ADMIN_ROLE_ID = 1554489401940246529       # رول مسؤول الإدارة العليا (لفك الحزم)
-# -----------------------------------------------------------
+LOG_CHANNEL_ID = 1558423955298328679          # آيدي روم سجل السحب (Log)
+PACKAGES_ADMIN_ROLE_ID = 1555405306777829398     # آيدي رول "مسؤول الحزم"
+HIGHER_ADMIN_ROLE_ID = 1554489401940246529      # آيدي رول "مسؤول الإدارة العليا" (لفك الحزم)
+# ---------------------------------------------------------------------------
 
 def parse_duration_to_minutes(duration_str: str) -> int:
-    """تحويل صيغ الوقت المختلفة إلى دقائق"""
+    """تحويل صيغ الوقت المختلفة مثل 2d أو 3h أو 10m أو 5 أيام إلى دقائق"""
     duration_str = duration_str.lower().strip()
+    
+    # البحث عن الصيغ القياسية مثل 2d, 3h, 10m
     match = re.search(r'(\d+)\s*([dhmأياساعةدقيقة]?)', duration_str)
     if not match:
         return 0
@@ -35,13 +36,14 @@ def parse_duration_to_minutes(duration_str: str) -> int:
     num = int(match.group(1))
     unit = match.group(2)
 
-    if unit in ['d', 'ي', 'أ']:
+    if unit in ['d', 'ي', 'أ']:  # أيام
         return num * 24 * 60
-    elif unit in ['h', 'س']:
+    elif unit in ['h', 'س']:    # ساعات
         return num * 60
-    elif unit in ['m', 'د']:
+    elif unit in ['m', 'د']:    # دقائق
         return num
     else:
+        # إذا تم كتابة عدد فقط بدون تحديد الوحدة يقتضي افتراض أنه أياَم
         return num * 24 * 60
 
 def format_minutes_to_text(total_minutes: int) -> str:
@@ -66,11 +68,11 @@ async def on_ready():
     print(f'تم تسجيل الدخول بنجاح بواسطة {bot.user}')
     try:
         synced = await bot.tree.sync()
-        print(f"تم مزامنة {len(synced)} أمر بنجاح.")
+        print(f"تم مزامنة {len(synced)} أمر.")
     except Exception as e:
         print(f"خطأ في المزامنة: {e}")
 
-# ==================== 1. أمر سحب الحزم (لمسؤول الحزم وفي روم الإنذارات فقط) ====================
+# ==================== 1. أمر سحب الحزم (لمسؤول الحزم) ====================
 @bot.tree.command(name="سحب_كل_الحزم", description="سحب حزم العضو وتدبيل المدة وإعطائه رولات السحب")
 @app_commands.describe(
     member="العضو المراد سحب حزمه",
@@ -78,14 +80,6 @@ async def on_ready():
     reason="سبب سحب الحزم"
 )
 async def strip_packages(interaction: discord.Interaction, member: discord.Member, duration: str, reason: str):
-    # 1. التحقق من القناة (يجب أن يكون في روم إنذارات الحزم فقط)
-    if interaction.channel_id != STRIP_CHANNEL_ID:
-        strip_channel = interaction.guild.get_channel(STRIP_CHANNEL_ID)
-        channel_mention = strip_channel.mention if strip_channel else "روم إنذارات الحزم"
-        await interaction.response.send_message(f"❌ هذا الأمر مخصص للاستخدام داخل {channel_mention} فقط!", ephemeral=True)
-        return
-
-    # 2. التحقق من الصلاحيات (مسؤول الحزم أو الإدارة العليا أو الأدمن)
     p_admin = interaction.guild.get_role(PACKAGES_ADMIN_ROLE_ID)
     h_admin = interaction.guild.get_role(HIGHER_ADMIN_ROLE_ID)
     
@@ -111,6 +105,7 @@ async def strip_packages(interaction: discord.Interaction, member: discord.Membe
                 roles_to_add.append(stripped_role)
                 added_names.append(stripped_role.mention)
 
+    # فحص ما إذا كان مع العضو رولات سحب سابقة من قبل
     has_existing_strip = any(
         interaction.guild.get_role(s_id) in member.roles 
         for s_id in PAIRS.values() if interaction.guild.get_role(s_id)
@@ -120,12 +115,13 @@ async def strip_packages(interaction: discord.Interaction, member: discord.Membe
         await interaction.followup.send(f"⚠️ العضو {member.mention} لا يمتلك أي حزم أساسية ولا يوجد لديه سحب نشط.", ephemeral=True)
         return
 
+    # حساب وتراكم الوقت
     new_minutes = parse_duration_to_minutes(duration)
     total_minutes = new_minutes
 
     log_channel = interaction.guild.get_channel(LOG_CHANNEL_ID)
     
-    # البحث في السجل عن مدة سابقة لتراكم الأيام
+    # البحث عن السحب السابق لدمج الوقت في حال كان مسحوباً بالفعل
     if has_existing_strip and log_channel:
         async for message in log_channel.history(limit=50):
             if message.embeds:
@@ -141,6 +137,7 @@ async def strip_packages(interaction: discord.Interaction, member: discord.Membe
     final_duration_text = format_minutes_to_text(total_minutes)
     new_duration_text = format_minutes_to_text(new_minutes)
 
+    # سحب الحزم وإضافة رولات السحب
     if roles_to_remove:
         await member.remove_roles(*roles_to_remove, reason=f"سحب حزم بواسطة {interaction.user.name}")
     if roles_to_add:
@@ -167,7 +164,7 @@ async def strip_packages(interaction: discord.Interaction, member: discord.Membe
     except discord.Forbidden:
         dm_status = "⚠️ الخاص مغلق لدى العضو."
 
-    # إرسال السجل الموثق في روم LOG
+    # إرسال السجل في روم LOG
     if log_channel:
         log_embed = discord.Embed(
             title="📋 سجل سحب وتدبيل الحزم (LOG)",
@@ -175,7 +172,7 @@ async def strip_packages(interaction: discord.Interaction, member: discord.Membe
             timestamp=datetime.datetime.now()
         )
         log_embed.add_field(name="العضو المستهدف", value=f"{member.mention} (`{member.id}`)", inline=False)
-        log_embed.add_field(name="مسؤول الحزم المنفذ للأمر", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        log_embed.add_field(name="مسؤول الحزم", value=f"{interaction.user.mention}", inline=False)
         log_embed.add_field(name="المدة المضافة الجديدة", value=new_duration_text, inline=True)
         log_embed.add_field(name="المدة الإجمالية (بعد التدبيل)", value=final_duration_text, inline=True)
         log_embed.add_field(name="السبب", value=reason, inline=False)
@@ -246,7 +243,7 @@ async def unstrip_packages(interaction: discord.Interaction, member: discord.Mem
             timestamp=datetime.datetime.now()
         )
         log_embed.add_field(name="العضو المستهدف", value=f"{member.mention} (`{member.id}`)", inline=False)
-        log_embed.add_field(name="مسؤول الإدارة العليا المنفذ", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        log_embed.add_field(name="مسؤول الإدارة العليا", value=f"{interaction.user.mention}", inline=False)
         log_embed.add_field(name="السبب", value=reason, inline=False)
         log_embed.add_field(name="الحزم التي تم إرجاعها", value=restored_str, inline=False)
         log_embed.set_thumbnail(url=member.display_avatar.url)
@@ -254,5 +251,4 @@ async def unstrip_packages(interaction: discord.Interaction, member: discord.Mem
 
     await interaction.followup.send(f"✅ تم فك الحزم عن {member.mention} وإرجاع رولاته بنجاح.", ephemeral=True)
 
-# ضع توكن البوت الخاص بك هنا
 bot.run("YOUR_BOT_TOKEN_HERE")
